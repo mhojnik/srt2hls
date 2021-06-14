@@ -87,8 +87,7 @@ def check_if_preferred_livesource(set_is_preferred_livesource, source) =
   callback
 end
 
-srt1 = input.srt(id="input_srt1",
-                 port=10000)
+srt1 = input.srt(id="input_srt1", port=10000)
 
 # Get metrics
 latency_metric(label_values=["default","input","srt1"],srt1)
@@ -100,16 +99,12 @@ set_is_preferred_livesource = is_preferred_livesource_metric(label_values=["defa
 thread.run.recurrent(delay=0.,check_if_preferred_livesource(set_is_preferred_livesource,"srt1"))
 
 # Wrap input in a buffer
-srt1 = buffer(id="buffer_srt1",
-              fallible=true,
-              max=3.0,
-              srt1)
+srt1 = buffer(id="buffer_srt1", fallible=true, max=3.0, srt1)
 
 # Tag source with it's name in metadata
 srt1 = source_tag(srt1, "srt1")
 
-srt2 = input.srt(id="input_srt2",
-                     port=10001)
+srt2 = input.srt(id="input_srt2", port=10001)
 
 # Get metrics
 latency_metric(label_values=["default","input","srt2"],srt2)
@@ -121,10 +116,7 @@ set_is_preferred_livesource = is_preferred_livesource_metric(label_values=["defa
 thread.run.recurrent(delay=0.,check_if_preferred_livesource(set_is_preferred_livesource,"srt2"))
 
 # Wrap input in a buffer
-srt2 = buffer(id="buffer_srt2",
-              fallible=true,
-              max=3.0,
-              srt2)
+srt2 = buffer(id="buffer_srt2", fallible=true, max=3.0, srt2)
 
 # Tag source with it's name in metadata
 srt2 = source_tag(srt2, "srt2")
@@ -161,6 +153,9 @@ thread.run.recurrent(delay=0.,check_if_ready(set_is_ready, increase_duration_unr
 
 def check_is_playing(metadata) =
   source_tag = list.assoc(default="", "source_tag", metadata)
+  title_tag = list.assoc(default="N/A", "title", metadata)
+  #log.important(label="playing", "#{title_tag}")
+  file.write(data=title_tag, "/hls/live.txt")
 
   if source_tag == "srt1" then
     set_is_playing_srt1(1.)
@@ -180,7 +175,7 @@ def check_is_playing(metadata) =
 end
 
 # Check output metadata to set is_playing metric
-radio_prod = on_metadata(check_is_playing, radio_prod)
+source.on_metadata(radio_prod, check_is_playing)
 
 # Detect blank before output
 
@@ -195,14 +190,14 @@ def blank_detect_handler() =
 end
 
 radio_prod = blank.detect(id="on_blank_radio_prod",
-                      max_blank=1.0,
-                      min_noise=0.0,
-                      on_noise=noise_detect_handler,
-                      start_blank=false,
-                      threshold=-40.0,
-                      track_sensitive=true,
-                      blank_detect_handler,
-                      radio_prod)
+  max_blank=1.0,
+  min_noise=0.0,
+  on_noise=noise_detect_handler,
+  start_blank=false,
+  threshold=-40.0,
+  track_sensitive=true,
+  blank_detect_handler,
+  radio_prod)
 
 
 ### END Radio logic
@@ -286,68 +281,79 @@ harbor.http.register(port=8081,method="GET","^/",httphandler)
 
 # Define outputs formats
 
-aac_lofi =
-  %ffmpeg(
-    format="mpegts",
-    %audio(
-      channels=2,
-      samplerate=44100,
-      codec="aac",
-      b="32k",
-      profile="aac_low"
-    )
-  )
+aac_lofi = %fdkaac(
+  channels=2,
+  samplerate=32000,
+  bandwidth="auto",
+  bitrate=32,
+  afterburner=true,
+  aot="mpeg4_he_aac_v2",
+  transmux="adts",
+  sbr_mode=true
+)
 
-aac_midfi =
-  %ffmpeg(
-    format="mpegts",
-    %audio(
-      channels=2,
-      samplerate=44100,
-      codec="aac",
-      b="96k",
-      profile="aac_low"
-    )
-  )
+aac_midfi = %fdkaac(
+  channels=2,
+  samplerate=44100,
+  bandwidth="auto",
+  bitrate=64,
+  afterburner=true,
+  aot="mpeg4_he_aac",
+  transmux="adts",
+  sbr_mode=true
+)
 
-aac_hifi =
-  %ffmpeg(
-    format="mpegts",
-    %audio(
-      channels=2,
-      samplerate=44100,
-      codec="aac",
-      b="196k",
-      profile="aac_low"
-    )
-  )
+aac_hifi = %fdkaac(
+  channels=2,
+  samplerate=48000,
+  bandwidth="auto",
+  bitrate=192,
+  afterburner=true,
+  aot="mpeg4_aac_lc",
+  transmux="adts",
+  sbr_mode=false
+)
 
-# Output to HLS
-
+streams = [
+  ("live_low",aac_lofi), 
+  ("live_mid",aac_midfi),  
+  ("live_high", aac_hifi)
+]
+                
 def segment_name(~position,~extname,stream_name) =
   timestamp = int_of_float(time())
-  duration = 2
-  "#{stream_name}_#{duration}_#{timestamp}_#{position}.ts"
+  "#{stream_name}_#{timestamp}_#{position}.#{extname}"
 end
 
-def on_file_change(~state,fname) =
-  if state == "closed" and file.extension(fname) != '.m3u8' then
-    log.important(label="hls", "Segment #{fname} created")
-  end
+output.file.hls(
+  playlist="live.m3u8",
+  segment_duration=5.0,
+  segments=10,
+  segment_name=segment_name,
+  !hlspath,
+  streams,
+  radio_prod
+)
+
+def filestop(filename) = 
+	log.important(label="archive", "#{filename}")
 end
 
-output.file.hls(id="output_hls",
-                playlist="live.m3u8",
-                segment_duration=2.0,
-                segments=5,
-                segments_overhead=5,
-                segment_name=segment_name,
-                on_file_change=on_file_change,
-                persist_at="state.config",
-                !hlspath,
-                [("aac_lofi",aac_lofi),
-                 ("aac_midfi", aac_midfi),
-                 ("aac_hifi", aac_hifi)],
-                radio_prod)
+output.file(
+  %fdkaac(
+    channels=2,
+    samplerate=48000,
+    bandwidth="auto",
+    bitrate=192,
+    afterburner=true,
+    aot="mpeg4_aac_lc",
+    transmux="adts",
+    sbr_mode=false
+  ),
+  '/hls/archive/%Y%m%d-%H%M%S.aac',
+  radio_prod,
+  reopen_when={00m or 30m},
+  on_close=filestop
+)
 
 ### END Outputs
