@@ -34,7 +34,7 @@ services:
     expose:
     - "80"
     ports:
-     - 80:80/tcp
+     - 8080:80/tcp
     volumes:
      - ./hls:/hls
      - ./nginxhls/stream.conf:/etc/nginx/conf.d/stream.conf
